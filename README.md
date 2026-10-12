@@ -54,7 +54,7 @@ The Learner Lab environment can't be saved, so the app is packaged to be redeplo
 2. **Upload** it to an S3 bucket: `aws s3 cp dist/bookstore-release.tar.gz s3://<bucket>/`
 3. **Network**: create the VPC, subnets, route tables, IGW and NAT gateway, then the three security groups.
 4. **RDS**: create PostgreSQL in the private subnets with database name `bookstore`.
-5. **Launch template**: Amazon Linux 2023, IAM instance profile `LabInstanceProfile`, EC2 security group, and `deploy/user-data.sh` as user data (edit the bucket and `DATABASE_URL` first). It installs the AWS CLI, so the instances need outbound internet through the NAT gateway.
+5. **Launch template**: Ubuntu Server 24.04 LTS, IAM instance profile `LabInstanceProfile`, EC2 security group, and `deploy/user-data.sh` as user data (edit the bucket and `DATABASE_URL` first). It installs the AWS CLI, so the instances need outbound internet through the NAT gateway.
 6. **ALB + target group**: HTTP:80 -> instances on 8080, health check path `/health`.
 7. **Auto Scaling group**: private subnets, attach to the target group, use ELB health checks, add a target tracking policy (average CPU 50%).
 8. **Budget**: create a monthly cost budget with an email alert.
