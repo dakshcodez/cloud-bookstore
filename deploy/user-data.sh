@@ -1,5 +1,5 @@
 #!/bin/bash
-# EC2 launch template user-data (Amazon Linux 2023).
+# EC2 launch template user-data (Ubuntu Server 24.04 LTS).
 # Edit the three variables below, then paste the script into the launch template.
 set -euxo pipefail
 
@@ -12,6 +12,14 @@ TOKEN=$(curl -s -X PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-met
 IMDS() { curl -s -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/$1"; }
 INSTANCE_ID=$(IMDS instance-id)
 AVAILABILITY_ZONE=$(IMDS placement/availability-zone)
+
+# Ubuntu doesn't ship the AWS CLI; install v2 (needs outbound internet via the NAT gateway).
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+apt-get install -y curl unzip
+curl -s "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip
+unzip -q /tmp/awscliv2.zip -d /tmp
+/tmp/aws/install
 
 mkdir -p /opt/bookstore
 aws s3 cp "s3://${S3_BUCKET}/bookstore-release.tar.gz" /tmp/release.tar.gz
