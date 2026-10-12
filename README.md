@@ -45,19 +45,145 @@ FRONTEND_DIR=../frontend cargo run
 # open http://localhost:8080
 ```
 
-## Deploy to AWS (Learner Lab)
+## Deploy to AWS (Learner Lab, console guide)
 
-The Learner Lab environment can't be saved, so the app is packaged to be redeployed quickly each session.
+The Learner Lab environment can't be saved, so you rebuild it each session. Do the steps in order. Use **us-east-1** (N. Virginia) throughout, and keep the same region in every console.
 
-1. **Build** a static binary and package it with the frontend (needs Docker):
-   `./deploy/build.sh` -> `dist/bookstore-release.tar.gz`
-2. **Upload** it to an S3 bucket: `aws s3 cp dist/bookstore-release.tar.gz s3://<bucket>/`
-3. **Network**: create the VPC, subnets, route tables, IGW and NAT gateway, then the three security groups.
-4. **RDS**: create PostgreSQL in the private subnets with database name `bookstore`.
-5. **Launch template**: Ubuntu Server 24.04 LTS, IAM instance profile `LabInstanceProfile`, EC2 security group, and `deploy/user-data.sh` as user data (edit the bucket and `DATABASE_URL` first). It installs the AWS CLI, so the instances need outbound internet through the NAT gateway.
-6. **ALB + target group**: HTTP:80 -> instances on 8080, health check path `/health`.
-7. **Auto Scaling group**: private subnets, attach to the target group, use ELB health checks, add a target tracking policy (average CPU 50%).
-8. **Budget**: create a monthly cost budget with an email alert.
+Names used below are suggestions; keep them consistent so you can find things.
+
+### 0. Prepare
+
+1. Start the lab in AWS Academy and click **AWS** to open the console. Check the region in the top-right.
+2. Build the release package locally (needs Docker):
+   ```bash
+   ./deploy/build.sh        # -> dist/bookstore-release.tar.gz
+   ```
+3. **S3**: *S3 → Create bucket*. Name it something globally unique (e.g. `bookstore-<your-initials>-<random>`), keep **Block all public access** on, and create it. Open the bucket → **Upload** → add `dist/bookstore-release.tar.gz`.
+
+   The bucket and its contents persist between sessions as long as the account does, so you usually only do this once. If the bucket is gone, redo it.
+
+### 1. VPC and subnets
+
+1. *VPC → Create VPC → **VPC and more*** (the wizard builds most of it for you).
+2. Settings:
+   - Name tag prefix: `bookstore`
+   - IPv4 CIDR: `10.0.0.0/16`
+   - Number of AZs: **2**
+   - Public subnets: **2**, private subnets: **2**
+   - NAT gateways: **In 1 AZ** (one is enough for a class project and costs less)
+   - VPC endpoints: **None**
+   - DNS options: leave both **enabled**
+3. Click **Create VPC** and wait for it to finish (the NAT gateway takes a couple of minutes).
+
+The wizard creates the internet gateway, route tables (public subnets route `0.0.0.0/0` to the IGW, private subnets to the NAT gateway) and the subnets. Note the VPC ID and the names of the four subnets.
+
+### 2. Security groups
+
+*VPC → Security groups → Create security group*. Create three, all in the `bookstore` VPC. Create them in this order, because each references the previous one.
+
+| Name | Inbound rule | Source |
+|---|---|---|
+| `bookstore-alb-sg` | HTTP, TCP 80 | Anywhere-IPv4 `0.0.0.0/0` |
+| `bookstore-app-sg` | Custom TCP 8080 | `bookstore-alb-sg` (select the security group, not an IP) |
+| `bookstore-db-sg` | PostgreSQL, TCP 5432 | `bookstore-app-sg` |
+
+Leave outbound as the default (all traffic).
+
+### 3. RDS PostgreSQL
+
+1. *RDS → Subnet groups → Create DB subnet group*:
+   - Name: `bookstore-db-subnets`, description anything
+   - VPC: `bookstore`
+   - AZs: select both; Subnets: select the **two private** subnets (check the CIDRs or names)
+2. *RDS → Databases → Create database*:
+   - Method: **Standard create**, Engine: **PostgreSQL** (a recent 16.x is fine)
+   - Templates: **Free tier** or **Dev/Test**. If Learner Lab complains about the template, choose Dev/Test and keep the settings below
+   - DB instance identifier: `bookstore-db`
+   - Master username: `bookstore`, password: choose one and **write it down**
+   - Instance class: **db.t3.micro** (burstable)
+   - Storage: gp3 / 20 GiB, disable storage autoscaling
+   - Multi-AZ: **No** (Learner Lab may block it and it costs more)
+   - Connectivity: VPC `bookstore`, subnet group `bookstore-db-subnets`, Public access **No**, security group `bookstore-db-sg` (remove `default`)
+   - **Additional configuration → Initial database name: `bookstore`** (easy to miss; the app expects this database)
+   - Disable enhanced monitoring and Performance Insights to avoid permission errors
+3. Create the database and wait until the status is **Available** (about 5-10 minutes).
+4. Open the database and copy the **Endpoint** (like `bookstore-db.xxxx.us-east-1.rds.amazonaws.com`).
+
+Your connection string is:
+```
+postgres://bookstore:<password>@<endpoint>:5432/bookstore
+```
+If the password has special characters (`@ : / ? #`), URL-encode them or choose a simpler password.
+
+### 4. Edit the user-data script
+
+Open `deploy/user-data.sh` and set:
+- `S3_BUCKET` to your bucket name
+- `DATABASE_URL` to the connection string from step 3
+
+Don't commit the real password to GitHub. Keep the edited copy local, or edit it only inside the launch template.
+
+### 5. Launch template
+
+*EC2 → Launch templates → Create launch template*:
+- Name: `bookstore-lt`. Tick **Provide guidance for Auto Scaling**
+- AMI: *Quick Start → **Ubuntu*** → **Ubuntu Server 24.04 LTS** (64-bit x86)
+- Instance type: **t3.micro**
+- Key pair: **Don't include** (not needed; use *Session Manager* or the EC2 console's *Connect* if you need a shell). Include `vockey` only if you want SSH
+- Network settings: don't specify a subnet. Security groups: `bookstore-app-sg`
+- Storage: volume 1, **8 GiB, gp3**, delete on termination (this is your EBS volume)
+- Advanced details:
+  - **IAM instance profile**: `LabInstanceProfile`
+  - **User data**: paste the full contents of the edited `user-data.sh`
+- Create the template.
+
+### 6. Target group and load balancer
+
+1. *EC2 → Target groups → Create target group*:
+   - Target type: **Instances**, name `bookstore-tg`
+   - Protocol HTTP, port **8080**, VPC `bookstore`
+   - Health checks: path **`/health`**; under advanced, healthy threshold 2, interval 15s
+   - Don't register any targets; the Auto Scaling group will do it. Create.
+2. *EC2 → Load balancers → Create load balancer → Application Load Balancer*:
+   - Name: `bookstore-alb`, scheme **Internet-facing**, IPv4
+   - VPC `bookstore`, mappings: both AZs, pick the **public** subnets
+   - Security group: `bookstore-alb-sg` (remove `default`)
+   - Listener: HTTP:80 → forward to `bookstore-tg`
+   - Create, then copy the **DNS name** from its details page.
+
+### 7. Auto Scaling group
+
+*EC2 → Auto Scaling groups → Create Auto Scaling group*:
+- Name: `bookstore-asg`, launch template `bookstore-lt` (latest version)
+- Network: VPC `bookstore`, subnets: the **two private** subnets
+- Load balancing: **Attach to an existing load balancer** → choose target group `bookstore-tg`
+- Health checks: turn on **Elastic Load Balancing health checks**, grace period **300** seconds (the user-data installs packages on boot)
+- Group size: desired **2**, minimum **2**, maximum **4**
+- Scaling policy: **Target tracking scaling policy**, metric **Average CPU utilization**, target **50**, instance warm-up 120 seconds
+- Skip notifications/tags, then create.
+
+### 8. Verify
+
+1. *EC2 → Instances*: two instances should start. Allow 3-5 minutes for user-data to finish.
+2. *EC2 → Target groups → `bookstore-tg` → Targets*: wait for both to be **healthy**.
+3. Open `http://<alb-dns-name>` in a browser. You should see the book list, and the header shows the instance ID. Refresh a few times and it should alternate between the two instances. Place an order to confirm the database works.
+
+**If targets are unhealthy**, in order:
+- Open a shell on an instance: *EC2 → Instances →* select it *→ Connect → Session Manager* (the instances are private and use the NAT gateway for outbound access; if Session Manager isn't available in your lab, launch the template once with the `vockey` key pair and SSH from a temporary public instance). Then check `sudo tail -n 50 /var/log/cloud-init-output.log`
+- `sudo systemctl status bookstore` and `sudo journalctl -u bookstore -n 50`
+- Common causes: wrong `DATABASE_URL`, the database wasn't created with initial name `bookstore`, `bookstore-db-sg` not allowing `bookstore-app-sg`, or no NAT route so `apt` / S3 download failed.
+
+### 9. AWS Budgets
+
+*Billing and Cost Management → Budgets → Create budget* → **Use a template (simplified)** → **Monthly cost budget**. Enter a budget amount (e.g. $10) and your email. Some Learner Lab accounts block Budgets; if so, take a screenshot of whatever the console shows and note the restriction in the report.
+
+### 10. Run the load test
+
+See [Load test](#load-test-auto-scaling) below. Take screenshots of the ASG **Activity** tab (scale-out and scale-in events) and the **Monitoring** tab CPU graph.
+
+### 11. Clean up (saves lab credit)
+
+Delete in this order: Auto Scaling group → load balancer → target group → RDS database (skip final snapshot) → **NAT gateway** (and release its Elastic IP) → VPC (this removes subnets, route tables, IGW and security groups). The NAT gateway and RDS are what use the most credit, so delete them first if you're short on time. Stopping the lab stops EC2 instances but doesn't delete these resources.
 
 ## Load test (Auto Scaling)
 
