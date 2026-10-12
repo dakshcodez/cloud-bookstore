@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Book Store</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Online Book Store</h1>
+    <p id="served-by">Served by: loading...</p>
+  </header>
+
+  <main>
+    <section>
+      <h2>Books</h2>
+      <table id="books">
+        <thead><tr><th>Title</th><th>Author</th><th>Price</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Place an order</h2>
+      <form id="order-form">
+        <input id="customer" placeholder="Your name" maxlength="100" required>
+        <select id="book-select" required></select>
+        <button type="submit">Order</button>
+      </form>
+      <p id="message"></p>
+    </section>
+
+    <section>
+      <h2>Recent orders</h2>
+      <table id="orders">
+        <thead><tr><th>#</th><th>Customer</th><th>Book</th><th>Time</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

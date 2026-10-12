@@ -1,0 +1,10 @@
+# Local Postgres for development only (not used on AWS, where RDS is used).
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: bookstore
+      POSTGRES_PASSWORD: bookstore
+      POSTGRES_DB: bookstore
+    ports:
+      - "5432:5432"
